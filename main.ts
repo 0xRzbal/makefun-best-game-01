@@ -1,41 +1,99 @@
-// A working best-game-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in. It copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. A starting point, not a winner: Block Dodger, a
-// plain 2D canvas game where a paddle dodges falling blocks and catches coins, with a title screen,
-// score, lives and levels, game over and restart, flat colours and no sound. Build your own game
-// (any genre, any library you vendor under game/, or none), put your 3 or 4 PNG or JPEG screenshots
-// in screenshots/ (the first by name is the cover) and run it.
+#!/usr/bin/env node
+// Best-game-01 entrypoint — assembles the submitted bundle.
 //
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+// Contract (unchanged): this program publishes the entry the judge reads. It copies this
+// directory's game/ (and screenshots/ when present) into the output directory and writes the
+// canonical dossier.json with the vendored make.fun library. The output directory comes from
+// $MAKEFUN_OUTPUT_DIR, falling back to /output inside the grader's container.
+//
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+//
+// This file is intentionally small and dependency-free: Node's standard library plus the
+// vendored scorer library, no build step, runs as-is under `node main.ts`.
 
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const DEFAULT_OUTPUT_DIR = '/output';
+const RETRY_ATTEMPTS = 4;
+const RETRY_BASE_MS = 150;
 
-mkdirSync(out, { recursive: true });
-cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+/**
+ * Caps mirror the scorer's own gate (reference/gate.json). Only text_max_bytes shapes the
+ * bytes; the rest refuse an entry the scorer would refuse, so we mirror them exactly.
+ */
+const CAPS = Object.freeze({
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  game_max_files: 993,
+  game_max_bytes: 50331648,
+  game_path_max_bytes: 1000,
+});
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
-// files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its
-// screenshots/ and dossier.json).
-writeFileSync(
-  join(out, 'dossier.json'),
-  buildDossier(out, {
-    text_max_bytes: 163840,
-    screenshots: { max: 4, max_bytes: 262144 },
-    game_max_files: 993,
-    game_max_bytes: 50331648,
-    game_path_max_bytes: 1000,
-  }),
-);
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Run an async op, retrying transient failures with exponential backoff.
+ * Bounded: at most `attempts` tries, backoff doubling from `baseMs`; the final error rethrows.
+ */
+async function withRetries(fn, { attempts = RETRY_ATTEMPTS, baseMs = RETRY_BASE_MS } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < attempts - 1) await sleep(baseMs * 2 ** attempt);
+    }
+  }
+  throw lastErr;
+}
+
+function sourceRoot() {
+  return fileURLToPath(new URL('.', import.meta.url));
+}
+
+function outputDir() {
+  return process.env.MAKEFUN_OUTPUT_DIR ?? DEFAULT_OUTPUT_DIR;
+}
+
+function ensureDir(dir) {
+  mkdirSync(dir, { recursive: true });
+}
+
+/** Recursively copy a tree; silently accept a missing source. */
+function copyTree(src, dst) {
+  if (!existsSync(src)) return;
+  cpSync(src, dst, { recursive: true });
+}
+
+async function assembleBundle(here, out) {
+  ensureDir(out);
+
+  // Copy the playable game and its screenshots. Wrapped in a bounded retry so a transient
+  // filesystem hiccup (e.g. EMFILE under load) doesn't fail the whole submission.
+  await withRetries(() => {
+    copyTree(join(here, 'game'), join(out, 'game'));
+    ensureDir(join(out, 'screenshots'));
+    copyTree(join(here, 'screenshots'), join(out, 'screenshots'));
+  });
+
+  const dossier = buildDossier(out, CAPS);
+  writeFileSync(join(out, 'dossier.json'), dossier);
+  return dossier.length;
+}
+
+async function main() {
+  const out = outputDir();
+  const bytes = await assembleBundle(sourceRoot(), out);
+  console.log(`[heliopause] bundle written to ${out}: game/, screenshots/, dossier.json (${bytes} bytes)`);
+}
+
+main().catch((err) => {
+  console.error('[heliopause] failed to assemble bundle:', err?.message ?? err);
+  process.exitCode = 1;
+});

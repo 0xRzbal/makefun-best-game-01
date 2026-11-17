@@ -126,6 +126,7 @@ function runGame() {
     if (events & EVENT_OVER) {
       endGame();
       audio.over();
+      renderer.addShake(22);
       return;
     }
     if (events & EVENT_WARP) {
@@ -134,6 +135,7 @@ function runGame() {
     }
     if (events & EVENT_HIT) {
       audio.hit();
+      renderer.addShake(9);
       announce(`Hit. ${world.state.player.hull} hull left.`);
     }
     if (events & EVENT_KILL) {

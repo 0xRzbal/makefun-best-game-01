@@ -25,6 +25,7 @@ export function createRenderer(canvas, rng) {
   const bestLabel = { value: -1, text: '' };
   const scoreLabel = { value: -1, text: '' };
   const levelLabel = { value: -1, text: '' };
+  let shake = 0;
 
   // Deterministic background field, generated once with a fixed seed.
   const stars = [];
@@ -447,7 +448,12 @@ export function createRenderer(canvas, rng) {
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.fillStyle = '#04040a';
     context.fillRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
+    // Screen shake: a decaying random offset on the playfield when damaged.
+    const sx = shake > 0 ? (Math.random() * 2 - 1) * shake : 0;
+    const sy = shake > 0 ? (Math.random() * 2 - 1) * shake : 0;
+    context.setTransform(view.scale, 0, 0, view.scale, view.x + sx, view.y + sy);
+    shake *= 0.86;
+    if (shake < 0.2) shake = 0;
 
     const level = Math.max(1, state.level);
     drawStarfield(t, level);
@@ -511,5 +517,11 @@ export function createRenderer(canvas, rng) {
     };
   }
 
-  return { draw, toField };
+  return {
+    draw,
+    toField,
+    addShake(mag) {
+      shake = Math.min(38, shake + mag);
+    },
+  };
 }
