@@ -2,16 +2,16 @@
 // (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
 // moves between four screens: title, play, paused and game over.
 //
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
+// ?seed=N fixes the run. ?shot=title|play|warp|end (with &seed=N) stages that scene instead of
+// running the loop, paints it twice and sets window.__shotReady for a screenshot.
+import { BEST_KEY, HULL, STAR, STEP } from './config.js';
 import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
+import { createAudio } from './audio.js';
+import { createWorld, EVENT_CORE, EVENT_HIT, EVENT_KILL, EVENT_OVER, EVENT_WARP } from './world.js';
 import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
 import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 import { stageShot } from './shots.js';
 
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
 const MAX_FRAME = 0.25;
 
 const params = new URLSearchParams(window.location.search);
@@ -23,6 +23,7 @@ const canvas = document.getElementById('game');
 const status = document.getElementById('status');
 const world = createWorld(createRandom(seed));
 const renderer = createRenderer(canvas);
+const audio = createAudio();
 
 function readBest() {
   try {
@@ -36,15 +37,17 @@ function saveBest(value) {
   try {
     window.localStorage.setItem(BEST_KEY, String(value));
   } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
+    /* private window: best lasts this visit only */
   }
 }
 
 function runShot(name) {
   const scene = stageShot(name, world);
+  const aim = (name === 'play' || name === 'warp') ? { x: world.state.player.x + 190, y: world.state.player.y - 120 } : null;
+  const thrust = (name === 'play' || name === 'warp') ? 1 : 0;
   let painted = 0;
   function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
+    renderer.draw(world.state, scene.screen, scene.best, aim, thrust);
     painted += 1;
     if (painted < 2) requestAnimationFrame(paint);
     else window.__shotReady = true;
@@ -58,17 +61,30 @@ function runGame() {
   let best = readBest();
   let accumulator = 0;
   let last = performance.now();
+  let prevCombo = 0;
+  const aim = { x: STAR.x + 220, y: STAR.y - 120 };
+  let muted = false;
 
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
   function announce(message) {
     status.textContent = message;
   }
+
+  function handleMute() {
+    muted = !muted;
+    audio.setMuted(muted);
+    announce(muted ? 'Muted.' : 'Sound on.');
+  }
+
+  window.addEventListener('keydown', (event) => {
+    if (event.code === 'KeyM') handleMute();
+  });
 
   function startGame() {
     world.reset();
     accumulator = 0;
     screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
+    prevCombo = 0;
+    announce(`Flying. ${HULL} hull.`);
   }
 
   function endGame() {
@@ -77,29 +93,55 @@ function runGame() {
       best = world.state.score;
       saveBest(best);
     }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
+    announce(`Hull destroyed. Score ${world.state.score}. Best ${best}.`);
   }
 
   function handleActions() {
     const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
+    if ((actions & ACTION_CONFIRM) && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
+    else if ((actions & ACTION_PAUSE) && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
       announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
+    } else if ((actions & (ACTION_PAUSE | ACTION_CONFIRM)) && screen === SCREEN_PAUSED) {
       screen = SCREEN_PLAY;
       announce('Playing.');
     }
   }
 
-  function step() {
+  function stepSim() {
     if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
+      world.step(STEP, { turn: 0, thrust: 0, fire: false, tx: 0, ty: 0 });
       return;
     }
-    const events = world.step(STEP, input.direction(), false);
-    if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
+    const field = renderer.toField(input.pointer.x, input.pointer.y);
+    aim.x = field.x;
+    aim.y = field.y;
+    const events = world.step(STEP, {
+      turn: input.turn(),
+      thrust: input.thrust(),
+      fire: input.fire(),
+      tx: aim.x,
+      ty: aim.y,
+    });
+    if (events & EVENT_OVER) {
+      endGame();
+      audio.over();
+      return;
+    }
+    if (events & EVENT_WARP) {
+      audio.warp();
+      announce(`Warp. Orbit ${world.state.level}.`);
+    }
+    if (events & EVENT_HIT) {
+      audio.hit();
+      announce(`Hit. ${world.state.player.hull} hull left.`);
+    }
+    if (events & EVENT_KILL) {
+      audio.explosion(48);
+      if (world.state.combo > prevCombo && world.state.combo > 1) audio.comboUp(world.state.combo);
+    }
+    if (events & EVENT_CORE) audio.pickup();
+    prevCombo = world.state.combo;
   }
 
   function frame(now) {
@@ -109,16 +151,16 @@ function runGame() {
     handleActions();
     if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
       while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
+        stepSim();
         accumulator -= STEP;
       }
     } else {
       accumulator = 0;
     }
-    renderer.draw(world.state, screen, best);
+    const thrust = screen === SCREEN_PLAY ? input.thrust() : 0;
+    renderer.draw(world.state, screen, best, screen === SCREEN_PLAY ? aim : null, thrust);
   }
 
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
@@ -126,7 +168,7 @@ function runGame() {
     }
   });
 
-  announce('Block Dodger. Press Space or click to start.');
+  announce('Heliopause. Press Space or click to launch. M toggles sound.');
   requestAnimationFrame(frame);
 }
 
