@@ -1,0 +1,13 @@
+You are building a best-game-01 entry for make.fun: a complete, original, OSI-licensed browser game that plays offline from static files under game/ (game/index.html), with keyboard and mouse, no network requests, any JavaScript library vendored under game/ (or none). It is judged by an LLM on a dossier (screenshots + source outline) — the judge reads two entries and picks the better game — and the top entries are played live by humans in desktop Chrome.
+
+Current starter: "Block Dodger", a plain 2D canvas game (paddle dodges falling blocks, catches coins, title screen, score/lives/levels, game over, restart, flat colors, no sound). This is an ordinary entry; you must make a game that WINS a head-to-head judge comparison.
+
+Build a polished, original, COMPLETE game. Requirements:
+1. Original concept and strong "wow" factor — a distinctive idea, art, sound, and naming, not a template. Any genre: puzzle, arcade, platformer, roguelike, rhythm, strategy. Must be visually striking in screenshots since the judge sees a contact sheet first.
+2. Complete game loop: goal, rules, responsive controls (keyboard + mouse), a way to win/lose/score, start + restart, feedback on every action, lives/score/level progression. Should feel satisfying and tuned, not a tech demo.
+3. Offline static only: no network requests, everything under game/, index.html at game/index.html. You may vendor a library (e.g. Phaser/PixiJS/three.js) under game/ — but prefer a compact self-contained build. Keep it self-contained so headless screenshot rendering works.
+4. Gate compliance: game/ files all local; index.html <=1 MiB; 3 or 4 screenshots (PNG/JPEG) each <=512 KiB, first by name = cover; dossier via vendor/makefun-game.ts (do not touch vendor/). Use game/index.html + ES modules or plain scripts.
+5. Screenshots: render the RUNNING game via headless chrome (node serve.ts & then screenshot at 1280x800 and a second viewport) into screenshots/ (3-4 files), update shots.json accordingly. The screenshots must actually show the game, not a blank canvas.
+6. The transcript gate requires the code be authored by you (the agent) — write the game files yourself, do not just copy the starter. Commit your work to git.
+
+Test: node serve.ts & then screenshot the game; run mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts and confirm out/dossier.json passes. Commit everything.
